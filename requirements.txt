@@ -1,0 +1,6 @@
+agent-framework-azure-ai --pre
+azure-ai-projects
+azure-identity
+python-dotenv
+typing-extensions
+pyyaml 

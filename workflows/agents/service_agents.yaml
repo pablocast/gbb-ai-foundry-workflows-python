@@ -1,0 +1,161 @@
+# Agent definitions refined to match the workflow "pagamento".
+#
+# Key points driven by the workflow:
+# - ServiceSelectionAgent is used in an externalLoop controlled by:
+#     Not(Local.ServiceSelection.IsComplete)
+#   so it MUST return: IsComplete + (ServiceId, ServiceName when complete).
+#
+# - GetBalanceAgent is invoked with arguments { AccountId } and should return Balance + Currency.
+#   This agent is tool-backed and typically should not require conversation looping.
+#
+# - BalanceAndConfirmationAgent is used in an externalLoop controlled by:
+#     Not(Local.Confirmation.IsComplete)
+#   so it MUST return: IsComplete + Confirmed + Amount (even if not confirmed) and echo ServiceId.
+#   Workflow already validates Amount > 0 and sufficient funds; agent should still guide user.
+#
+# - PayServiceAgent is invoked with arguments { AccountId, ServiceId, Amount } and returns ReceiptId + ReceiptDetails.
+#
+# - PaymentAgent is invoked after payment with { ReceiptId, ReceiptDetails } and autoSend=true.
+#   It can simply craft a friendly message/summary. The workflow does not externalLoop on it.
+#
+# Tools referenced here are *names* and should be bound in Python (tool registry).
+#
+# Output schemas are referenced by name and should be provided by your Python schemas registry.
+
+agents:
+  ServiceSelectionAgent:
+    model: foundry_model
+    tools: [ListFavoriteServices]
+    output_schema: ServiceSelectionResult
+    structured_inputs:
+      CustomerId:
+        required: true
+        description: "Customer identifier for the user"
+    instructions: |
+      Eres un asistente de pagos.
+
+      Tarea:
+      - Ayudar al usuario a seleccionar un servicio favorito para pagar.
+
+      Reglas:
+      - Usa la herramienta ListFavoriteServices para mostrar las opciones de servicios disponibles.
+      - Pregunta cuál servicio desea pagar.
+      - Si el usuario menciona un servicio ambiguo, haz una pregunta de aclaración.
+      - Cuando el usuario seleccione un servicio, pide confirmación: "¿Confirmas que deseas pagar [NombreServicio]?"
+      - Solo cuando el usuario confirme explícitamente (sí, correcto, confirmo, etc.), marca IsComplete=true.
+      - No preguntes sobre monto ni método de pago - eso lo maneja otro agente.
+      - No inventes ServiceId. Si no puedes determinarlo, sigue preguntando.
+
+      Formato de salida:
+      - Devuelve SIEMPRE un JSON válido que cumpla el esquema.
+      - Mientras falte confirmación del servicio, usa IsComplete=false y deja ServiceId/ServiceName vacíos.
+
+      Contexto:
+      - CustomerId: {{CustomerId}}
+
+  GetBalanceAgent:
+    model: foundry_model
+    tools: [GetBalance]
+    output_schema: BalanceResult
+    structured_inputs:
+      AccountId:
+        required: true
+        description: "Account identifier."
+    instructions: |
+      Eres un agente que obtiene el saldo de una cuenta bancaria.
+
+      Tarea:
+      - Llama a GetBalance(AccountId) exactamente una vez para obtener el saldo.
+      - Devuelve el resultado (Balance, Currency) en la salida estructurada.
+
+      Reglas:
+      - No hagas preguntas al usuario.
+      - No inventes datos: si la herramienta falla, indica ErrorMessage y deja Balance/Currency en valores seguros.
+
+      Contexto:
+      - AccountId: {{AccountId}}
+
+  LatestBillAndConfirmationAgent:
+    model: foundry_model
+    tools: [GetLatestBill]
+    output_schema: PaymentConfirmationResult
+    structured_inputs:
+      CustomerId:
+        required: true
+        description: "Customer identifier."
+      ServiceId:
+        required: true
+        description: "Selected service id."
+      ServiceName:
+        required: true
+        description: "Selected service name."
+      Balance:
+        required: true
+        default: 0
+        description: "Available balance."
+      Currency:
+        required: true
+        default: "S/."
+        description: "Currency code."
+    instructions: |
+      Eres un asistente de pagos. 
+
+      Tarea:
+      Obtener el valor a pagar usando la herramienta GetLatestBill y confirmar el pago con el usuario.
+
+      Reglas:
+      - Llama a la herramienta GetLatestBill(CustomerId, ServiceId) para obtener el monto pendiente.
+      - Si la herramienta devuelve un monto exitosamente:
+          - Muestra al usuario: "El monto a pagar por [ServiceName] es [Amount] [Currency]. Tu saldo disponible es [Balance] [Currency]. ¿Confirmas el pago?"
+          - NO ofrezcas pagar un monto diferente. El monto es fijo.
+      - Si la herramienta falla (no devuelve monto):
+          - Solo entonces pregunta al usuario cuánto desea pagar.
+      - Si el usuario confirma: IsComplete=true, Confirmed=true, Amount=monto obtenido.
+      - Si el usuario cancela/rechaza: IsComplete=true, Confirmed=false, Amount=0.
+
+      Importante:
+      - NO permitas que el usuario cambie el monto si la herramienta lo devolvió correctamente.
+      - El workflow validará si hay fondos suficientes.
+      - El workflow realizará el pago usando otro agente.
+
+      Formato de salida:
+      - Devuelve SIEMPRE un JSON válido que cumpla el esquema.
+      - Siempre incluye ServiceId (eco del input).
+      - Amount debe ser numérico (usa 0 si el usuario cancela o aún no hay monto).
+      
+      Contexto:
+        - CustomerId: {{CustomerId}}
+        - Servicio: {{ServiceName}} ({{ServiceId}})
+        - Saldo disponible: {{Balance}} {{Currency}}
+
+  PayServiceAgent:
+    model: foundry_model
+    tools: [PayService]
+    output_schema: PaymentExecutionResult
+    structured_inputs:
+      AccountId:
+        required: true
+        description: "Account identifier."
+      ServiceId:
+        required: true
+        description: "Service identifier."
+      Amount:
+        required: true
+        default: 0
+        description: "Amount to pay."
+    instructions: |
+        Eres un agente de ejecución de pagos.
+
+        Tarea:
+        - Llama a PayService(AccountId, ServiceId, Amount).
+        - Devuelve ReceiptId y ReceiptDetails exactamente como los entregue la herramienta.
+
+        Reglas:
+        - No converses con el usuario.
+        - No inventes recibos: si falla, devuelve ErrorMessage y deja ReceiptId/ReceiptDetails vacíos.
+
+        Contexto:
+        - AccountId: {{AccountId}}
+        - ServiceId: {{ServiceId}}
+        - Amount: {{Amount}}
+ 

@@ -1,0 +1,119 @@
+kind: workflow
+trigger:
+  kind: OnConversationStart
+  id: pago_servicios
+  actions:
+    - kind: SetVariable
+      id: capture_user_message
+      variable: Local.UserMessage
+      value: =System.LastMessage.Text
+    - kind: SetVariable
+      id: set_customer_id
+      variable: Local.CustomerId
+      value: "cust-1"
+    - kind: SetVariable
+      id: set_account_id
+      variable: Local.AccountId
+      value: "acct-123" 
+    - kind: InvokeAzureAgent
+      id: select_service
+      conversationId: =System.ConversationId
+      agent:
+        name: ServiceSelectionAgent
+      input:
+        arguments:
+          CustomerId: =Local.CustomerId
+        messages: =UserMessage(Local.UserMessage)
+        externalLoop:
+          when: =Not(Local.ServiceSelection.IsComplete)
+      output:
+        responseObject: Local.ServiceSelection
+    - kind: InvokeAzureAgent
+      id: get_balance
+      conversationId: =System.ConversationId
+      agent:
+        name: GetBalanceAgent
+      input:
+        arguments:
+          AccountId: =Local.AccountId
+      output:
+        responseObject: Local.Balance
+    - kind: InvokeAzureAgent
+      id: confirm_payment
+      conversationId: =System.ConversationId
+      agent:
+        name: LatestBillAndConfirmationAgent
+      input:
+        arguments:
+          CustomerId: =Local.CustomerId
+          ServiceId: =Local.ServiceSelection.ServiceId
+          ServiceName: =Local.ServiceSelection.ServiceName
+          Balance: =Local.Balance.Balance
+          Currency: =Local.Balance.Currency
+        externalLoop:
+          when: =Not(Local.Confirmation.IsComplete)
+      output:
+        responseObject: Local.Confirmation
+    - kind: ConditionGroup
+      id: decision
+      conditions:
+        - condition: =Not(Local.Confirmation.Confirmed)
+          id: case_cancelled
+          actions:
+            - kind: SendActivity
+              id: cancelled_message
+              activity: Entendido, no realizo el pago. ¿Quieres pagar otro servicio?
+            - kind: GotoAction
+              id: goto_end_cancelled
+              actionId: all_done
+        - condition: =Local.Confirmation.Confirmed
+          id: case_pay
+          actions:
+            - kind: ConditionGroup
+              id: validate_amount
+              conditions:
+                - condition: =Local.Confirmation.Amount <= 0
+                  id: invalid_amount
+                  actions:
+                    - kind: SendActivity
+                      id: invalid_amount_message
+                      activity: El monto debe ser mayor que 0. No se pudo procesar el pago.
+                    - kind: GotoAction
+                      id: goto_end_invalid
+                      actionId: all_done
+                - condition: =Local.Confirmation.Amount > Local.Balance.Balance
+                  id: insufficient_funds
+                  actions:
+                    - kind: SendActivity
+                      id: insufficient_message
+                      activity: |
+                        ❌ Fondos insuficientes: El monto a pagar ({Local.Confirmation.Amount} {Local.Balance.Currency}) 
+                        es mayor que tu saldo disponible ({Local.Balance.Balance} {Local.Balance.Currency}).
+                        No se realizó el pago. ¿Deseas pagar otro servicio?
+                    - kind: GotoAction
+                      id: goto_end_insufficient
+                      actionId: all_done
+              elseActions:
+                - kind: InvokeAzureAgent
+                  id: pay
+                  agent:
+                    name: PayServiceAgent
+                  input:
+                    arguments:
+                      AccountId: =Local.AccountId
+                      ServiceId: =Local.ServiceSelection.ServiceId
+                      Amount: =Local.Confirmation.Amount
+                  output:
+                    responseObject: Local.Payment
+                - kind: SendActivity
+                  id: show_receipt
+                  activity: |
+                    ✅ Pago confirmado — ReceiptId: {Local.Payment.ReceiptId}
+                    {Local.Payment.ReceiptDetails}
+                    ¿Deseas realizar otro pago?
+                - kind: GotoAction
+                  id: goto_end_paid
+                  actionId: all_done
+    - kind: EndConversation
+      id: all_done
+name: pagamento
