@@ -1,0 +1,7 @@
+name: gbb-ai-foundry-workflows
+metadata:
+  template: python@latest
+infra:
+  provider: bicep
+  path: infra
+  
