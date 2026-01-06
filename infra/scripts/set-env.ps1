@@ -20,7 +20,7 @@ $envContent = @"
 # Environment variables
 # Generated from Bicep deployment outputs
 
-# ---- AOAI/LLM/Embedding Model Variables ----
+# ---- Foundry Project/LLM/Embedding Model Variables ----
 AZURE_AI_PROJECT_ENDPOINT=$(Get-AzdValue $azdEnvValues "AZURE_AI_PROJECT_ENDPOINT")
 AZURE_AI_MODEL_DEPLOYMENT_NAME=$(Get-AzdValue $azdEnvValues "AZURE_AI_MODEL_DEPLOYMENT_NAME")
 "@
